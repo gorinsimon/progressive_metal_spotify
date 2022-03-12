@@ -1,2 +1,11 @@
-# progressive_metal_spotify
-Analysis and classification of progressive vs. generic metal songs using Spotify data
+# What makes a metal song progressive?
+
+This repository contains the work I have done for a personal project of mine where I attempted to answer the following question: **What makes a metal song progressive?** To achieve my goal, I first collected information about the musical features of thousands of generic and progressive metal songs from the *Spotify* API using the **awesome** [Spotifyr](https://github.com/charlie86/spotifyr) package in R from [Daniel Antal](https://github.com/antaldaniel). You can find the script I used to collect this information as well as the datasets created for generic and progressive songs in the `data` folder.
+
+After gathering all these data, I applied exploratory data analysis techniques to better understand what distinguishes a progressive metal song from a generic metal song. Next, I applied logistic regression and random-forest models to determine if one could use the music features available via the *Spotify* API to predict the category of songs (progressive or generic).
+
+This little case study was my first attempt at applying these classification techniques and I was surprised to find that it worked quite well. Spoiler alert: it seems we can make reliable predictions with just a few musical features. If you're interested in the full story, feel free to check out my (first!) blog [post](post) where you can find a step-by-step description of the case study.
+
+Concerning the structure of the repository, the `data` folder contains the datasets and the R script used to create them (be aware that if you use the script, it takes some time to collect all the data). The `functions` folder contains an adapted version of a function from the `spotifyr` package that I creaed to collect some specific features provided by the *Spotify* API. Finally, the `prog_analysis.Rmd` file contains all the steps of the project (data collection, EDA and modeling), as described in my blog post.
+
+For more information on the procedure for collecting the data and running the analysis, please see my blog [post](post) or refer to the comments in the individual scripts. Feel free to contact me if you can't find the information you are looking for.

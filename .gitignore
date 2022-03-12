@@ -1,0 +1,12 @@
+# Files that are produced by R and RStudio are not tracked
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+
+# knitr and R markdown default cache and files directories are not tracked
+*_cache
+*_files
+
+# The output file is not tracked
+prog_analysis.html
