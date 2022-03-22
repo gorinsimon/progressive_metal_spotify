@@ -6,7 +6,6 @@
 
 # knitr and R markdown default cache and files directories are not tracked
 *_cache
-*_files
 
 # The output file is not tracked
-progressive_metal_spotify.html
+prog_analysis.html

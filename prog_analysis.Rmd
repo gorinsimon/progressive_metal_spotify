@@ -1,0 +1,1131 @@
+---
+title: "What makes a metal song progressive?"
+# subtitle: "Modeling the difference between generic and progressive metal songs using Spotify data"
+author:
+  - Gorin, Simon
+date: "`r format(Sys.time(), '%d/%m/%y')`"
+output:
+  html_document:
+    highlight: haddock
+    mathjax: null
+    number_sections: false
+    css: ["styles.css"]
+    self_contained: false
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(eval = TRUE, echo = TRUE, include = TRUE, warning = FALSE, message = FALSE, fig.width = 8, fig.height = 5, fig.retina = 3, fig.align = "center", out.width = "80%", comment = "#>", dev = 'svglite')
+
+here::i_am("prog_analysis.Rmd") # Initializes project root
+
+showtext::showtext_opts(dpi = 320)
+```
+
+Through this project, I wanted to try to answer a question that, as a music lover and a big consumer of music (especially metal and progressive music), I have asked myself many times in the last years: ***What makes a (metal) song progressive?***
+
+I'll be honest with you, I already have a feeling of what makes a metal song progressive. From my experience, I would say first of all that progressive songs are longer (some songs can go beyond 10 minutes, as [Octavarium](https://www.youtube.com/watch?v=XYV8Zt2k0RQ&list=OLAK5uy_kenWZqZjpo5SVB1Jqq5I_ymw9FXIpVOKQ) from *Dream Theater* which is 24 minutes long!). I also have the impression that progressive metal songs have more complex rhythmic structures (have a look at Leo Margarit's incredible drumming on the song [Wait](https://www.youtube.com/watch?v=zDzrglYYVvM) from *Pain of Salvation*) and alternate more between strong/fast and softer/slow parts (as in the song [Millions](https://www.youtube.com/watch?v=Fye2KREpeJQ) from *Between The Buried And Me*).
+
+Of course, this is my interpretation of what makes a metal song progressive, and it may not be representative. Maybe I just tend to listen to longer and more complex songs? A better approach would be to explore the problem more rigorously. I recently learned that it is possible to access the *spotify* web API (see [here](https://developer.spotify.com/documentation/web-api/)), making it easy to collect information on a lot of songs. This was then the perfect opportunity to start working on a more systematic investigation of the characteristics of progressive metal songs.
+
+First, I created a dataset of metal songs and their associated musical features. To do that, I used the **awesome [Spotifyr](https://github.com/charlie86/spotifyr) package from [Daniel Antal](https://github.com/antaldaniel)**. Next, I trained logistic regression and random-forest models to classify metal songs into two categories: progressive or generic. To learn what makes (or not) a metal song progressive, I finally looked at the most important musical features in the best model (*Spoiler alert*: my first impression on what makes progressive songs progressive seemed that be correct!).
+
+Before going any further, you may rightfully ask me why it is so important to do such an analysis? First, it satisfied my curiosity and I learned a lot! But beyond that, this could have several implications. Consider that you are a music provider service and you have users who listen to a lot of progressive metal songs. Having a tool to classify a metal song as progressive with good confidence can provide a more direct way to make relevant music recommendations to these users. These relevant recommendations could then help keep the customer on your platform. Another implication would be to enable better song labeling by providing more accurate genre labels or to guide song selection for genre-specific playlists.
+
+## Creating a dataset of metal songs
+
+Since I was not aware of any dataset on the musical properties of metal songs (there is a dataset on [Kaggle](https://www.kaggle.com/mrmorj/dataset-of-songs-in-spotify) that was close to what I was looking for, but unfortunately it was not specific enough), I've decided to create my own. First, I searched the Web for Spotify playlists focusing on either progressive or generic metal. Then, I collected the names of all the artists in the identified playlists and gathered for each artist all their albums and the corresponding tracks.
+
+My search on the web led me to select three playlists for generic metal:
+
++ [Mix Metal](https://open.spotify.com/playlist/37i9dQZF1EQpgT26jgbgRI)
++ [Kickass Metal](https://open.spotify.com/playlist/37i9dQZF1DWTcqUzwhNmKv)
++ [Metal Essentials](https://open.spotify.com/playlist/37i9dQZF1DWWOaP4H0w5b0)
+
+And three playlists for progressive metal:
+
++ [Progressive Metal by Spotify](https://open.spotify.com/playlist/37i9dQZF1DX5wgKYQVRARv)
++ [Progressive Metal by Century Media](https://open.spotify.com/playlist/62sl2B97a8xD7B99pNdJwc)
++ [The Sound of Progressive Metal](https://open.spotify.com/playlist/74RFwHMUEVXkqK2KeeIMPl)
+
+Hereafter, I describe all the steps involved in collecting the data and creating the dataset. The steps below are presented only for the sake of reproducibility so feel free to skip that part if you're not interested in these details.
+
+If you want to use the dataset I created, you can either use the code chunks below or use the script on the [Github](https://github.com/gorinsimon/spotify_prog_metal_analysis) of this project (be prepared, it takes quite some time). A quicker alternative is to load the data directly from the [Github](https://github.com/gorinsimon/spotify_prog_metal_analysis) of this project. If you use my code, be aware that you **need an access token to get data from Spotify**. I suggest that you follow the instructions for authentication when using the `spotifyr` package (see [here](https://github.com/charlie86/spotifyr#authentication)).
+
+### Creating a list of artists
+
+If you want to skip the dataset creation steps, leave the `is_eval` variable in the chunk below set to `FALSE`. This way, the code chunks creating the dataset will not be evaluated. By setting `is_eval` to `FALSE`, you will instead load the files `generic_metal_tracks_features.csv` and `prog_metal_tracks_features.csv` from the `data` folder (you then first need to download the data!). Next, the two files are merged and some transformations are applied:
+
++ recoding the levels of `mode` (*0* becomes *minor* and *1* becomes *major*)
++ transformation of the 5 levels of `time_signature` to *binary* versus *non-binary*
++ recoding the levels of `key` (from numeric to key names)
++ transformation of `duration` from millisecond to second.
+
+```{r dat-load}
+
+library(spotifyr)   # great package to get Spotify data
+library(tidyverse)  # collections of package for data science
+library(here)       # to work with relative path
+
+is_eval = FALSE
+
+if (is_eval) {
+  Sys.setenv(SPOTIFY_CLIENT_ID = 'X')     # you need to replace 'X' with your own client ID
+  Sys.setenv(SPOTIFY_CLIENT_SECRET = 'X') # you need to replace 'X' with your own client secret
+} else {
+  # Load and merge the files with generic and progressive metal songs
+  generic_metal_tracks_features <-
+    read_csv(here("data", "generic_metal_tracks_features.csv")) %>%
+    mutate(`Metal type` = "Generic")
+  prog_metal_tracks_features <-
+    read_csv(here("data", "prog_metal_tracks_features.csv")) %>%
+    mutate(`Metal type` = "Progressive")
+  
+  # Combine all metal tracks and does some formatting
+  all_tracks_features <-
+    bind_rows(generic_metal_tracks_features,
+              prog_metal_tracks_features) %>%
+    mutate(mode = c("Minor", "Major")[mode + 1],
+           time_signature = if_else(time_signature %% 2 == 0, "binary", "non-binary"),
+           key = c("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")[key + 1],
+           duration = duration_ms/1000,
+           across(.cols = c(key, mode, time_signature), as.factor)) %>%
+    select(-duration_ms)
+}
+
+```
+
+The code below collects the ID and artist name of all tracks in the six identified playlists. This is done using the `get_playlist_tracks` function from the `spotifyr` package. Once the information is collected, any artist present in both types of playlist (generic and progressive) is removed from the data.
+
+```{r collect-artists, eval = is_eval}
+
+# Collect tracks info for the 3 generic metal playlists
+metal_mix_by_spotify <- get_playlist_tracks('37i9dQZF1EQpgT26jgbgRI',
+                                            fields = c("track.album.artists"))
+
+kickass_metal_by_spotify <- get_playlist_tracks('37i9dQZF1DWTcqUzwhNmKv',
+                                                fields = c("track.album.artists"))
+
+
+metal_essentials_by_spotify <- get_playlist_tracks('37i9dQZF1DWWOaP4H0w5b0',
+                                                   fields = c("track.album.artists"))
+
+# Combine all the generic metal tracks
+generic_metal_artists <-
+  bind_rows(metal_mix_by_spotify,
+            kickass_metal_by_spotify,
+            metal_essentials_by_spotify) %>%
+  unnest(track.album.artists) %>%
+  select(name, id) %>%
+  distinct()
+
+# Collect tracks info for the 3 progressive metal playlists
+progressive_metal_by_spotify <-
+  get_playlist_tracks('37i9dQZF1DX5wgKYQVRARv',
+                      fields = c("track.album.artists"))
+
+progressive_metal_by_century_media <-
+  get_playlist_tracks('62sl2B97a8xD7B99pNdJwc',
+                      fields = c("track.album.artists"))
+
+sound_of_progressive_metal_by_spotify <-
+  get_playlist_tracks('74RFwHMUEVXkqK2KeeIMPl',
+                      fields = c("track.album.artists"))
+
+# Combine all the progressive metal tracks
+prog_metal_artists <-
+  bind_rows(progressive_metal_by_spotify,
+            progressive_metal_by_century_media,
+            sound_of_progressive_metal_by_spotify) %>%
+  unnest(track.album.artists) %>%
+  select(name, id) %>%
+  distinct()
+
+# Exclude any generic artist also in the list of progressive artists
+generic_metal_artists_final <-
+  generic_metal_artists %>%
+  filter(!(id %in% unique(prog_metal_artists$id)))
+
+# Exclude any progressive artist also in the list of generic artists
+prog_metal_artists_final <-
+  prog_metal_artists %>%
+  filter(!(id %in% unique(generic_metal_artists$id)))
+
+```
+
+### Collecting information on all songs from each artist
+
+The albums of each artist in `generic_metal_artists_final` and `prog_metal_artists_final` are retrieved using the `get_artist_albums` function from the `spotifyr` package. Any album containing a word present in `song_album_vector_filter` is discarded to reduce the possibility of duplicates. These keywords list is not exhaustive, but I believe it is a good start to reduce duplicates.
+
+```{r collect-album, eval = is_eval}
+
+# The vector below contains a list of keywords used to filter out album/songs. The
+# purpose of the list is to reduce the presence of duplicates and "non-musical"
+# tracks. For instance, "live" songs/albums are probably duplicates as it is
+# likely that a "studio" version also exists.
+
+song_album_vector_filter <- c("intro", "outro", "interlude", "commentary", "remaster",
+                              "edition", "compilation", "live", "version", "remix",
+                              "acoustic", "- live", "\\(live", "\\[live", "unplugged",
+                              "deluxe", "reissue", "anniversary", "bonus", "cover", "redux")
+
+# Collapse all the keyword in a single string. The list is probably not optimal
+# but I think this is doing a fair job for now...
+
+song_album_filter <- glue::glue_collapse(song_album_vector_filter, sep = "|")
+
+# Collect albums from generic metal artists
+
+generic_metal_albums <-
+  map_df(generic_metal_artists_final$id, ~ get_artist_albums(id = .x, include_groups = c("album"))) %>%
+  filter(!str_detect(str_to_lower(name), song_album_filter)) %>%
+  unnest(artists, names_sep = "_") %>%
+  # The code below ensures that if several instances of the same album exist
+  # only the first one is considered
+  group_by(artists_name, name) %>%
+  slice(1) %>%
+  ungroup()
+
+# Collect albums from progressive metal artists
+
+prog_metal_albums <-
+  map_df(prog_metal_artists_final$id, ~ get_artist_albums(id = .x, include_groups = c("album"))) %>%
+  filter(!str_detect(str_to_lower(name), song_album_filter)) %>%
+  unnest(artists, names_sep = "_") %>%
+  # The code below ensures that if several instances of the same album exist
+  # only the first one is considered
+  group_by(artists_name, name) %>%
+  slice(1) %>%
+  ungroup()
+
+```
+
+The next step is to retrieve information about the songs in the albums, using the `get_album_tracks` function of the `spotifyr` package. Songs with a word in their name in `song_album_filter` are removed. As for the filtering of the albums, the list of keywords is maybe not optimal, but I believe it is appropriate to limiting the number of duplicates.
+
+```{r collect-tracks, eval = is_eval}
+
+# The code below retrieves information on each song from all generic metal albums
+
+generic_metal_tracks <-
+  map_df(generic_metal_albums$id, ~ get_album_tracks(id = .x)) %>%
+  filter(!str_detect(str_to_lower(name), song_album_filter)) %>%
+  unnest(artists, names_sep = "_") %>%
+  distinct(id, .keep_all = TRUE) %>%
+  group_by(str_to_lower(name), str_to_lower(artists_name)) %>%
+  slice(1) %>%
+  ungroup() %>%
+  select(id, name, artists_name)
+
+# The code below retrieves information on each song from all progressive metal albums
+
+prog_metal_tracks <-
+  map_df(prog_metal_albums$id, ~ get_album_tracks(id = .x)) %>%
+  filter(!str_detect(str_to_lower(name), song_album_filter)) %>%
+  unnest(artists, names_sep = "_") %>%
+  distinct(id, .keep_all = TRUE) %>%
+  group_by(str_to_lower(name), str_to_lower(artists_name)) %>%
+  slice(1) %>%
+  ungroup() %>%
+  select(id, name, artists_name)
+
+```
+
+It is now time to get information on the musical features characterizing the different songs, using the `get_track_audio_features` function from the `spotifyr` package. Next, I filtered out the songs meeting any of the following criteria:
+
++ `liveness` > .8 (according to Spotify, tracks with `liveness` above .8 are likely to be live)
++ `energy` = 0 (as it is likely to be a "silent" song)
++ `acousticness` = 1 (according to Spotify, tracks with `acousticness` equal to 1 are highly likely to be acoustic)
+
+Finally, I also adapted the `get_track_audio_analysis` function to get extra information on the confidence of the reliability of `tempo`, `mode`, `key`, and `time_signature` features.
+
+```{r collect-features, eval = is_eval}
+
+generic_metal_tracks_features <-
+  generic_metal_tracks %>%
+  # Features can be retrieved for 100 tracks at once.
+  # Data are then split into set of 100 tracks to speed up the process
+  mutate(n_group_features = rep(c(1:((n() %/% 100) + 1)), each = 100)[1:n()]) %>%
+  select(id, n_group_features) %>%
+  group_split(n_group_features) %>%
+  map_df(., ~ get_track_audio_features(.x$id)) %>%
+  left_join(generic_metal_tracks, by = "id") %>%
+  filter(acousticness < 1,  # Removing acoustic tracks (according to Spotify 1 is acoustic),
+         liveness <= 0.8,   # Removing live tracks (above 0.8 is strong likelihood that the track is live)
+         energy > 0,        # Removing tracks with 0 energy (potential silent songs)
+         tempo > 0) %>%     # Removing tracks with tempo equals 0 (potential silent/transition songs)
+  bind_cols(map_dfr(.$analysis_url, get_track_audio_analysis_confidence)) %>%
+  select(-c(liveness, acousticness, type, uri, track_href))
+
+prog_metal_tracks_features <-
+  prog_metal_tracks %>%
+  # Features can be retrieved for 100 tracks at once.
+  # Data are then split into set of 100 tracks to speed up the process
+  mutate(n_group_features = rep(c(1:((n() %/% 100) + 1)), each = 100)[1:n()]) %>%
+  select(id, n_group_features) %>%
+  group_split(n_group_features) %>%
+  map_df(., ~ get_track_audio_features(.x$id)) %>%
+  left_join(prog_metal_tracks, by = "id") %>%
+  filter(acousticness < 1,  # Removing acoustic tracks (according to Spotify 1 is acoustic),
+         liveness <= 0.8,   # Removing live tracks (above 0.8 is strong likelihood that the track is live)
+         energy > 0,        # Removing tracks with 0 energy (potential silent songs)
+         tempo > 0) %>%     # Removing tracks with tempo equals 0 (potential silent/transition songs)
+  bind_cols(map_dfr(.$analysis_url, get_track_audio_analysis_confidence)) %>%
+  select(-c(liveness, acousticness, type, uri, track_href))
+
+# Combine all metal tracks and does some formatting
+
+all_tracks_features <-
+  bind_rows(generic_metal_tracks_features,
+            prog_metal_tracks_features) %>%
+  mutate(mode = c("Minor", "Major")[mode + 1],
+         time_signature = if_else(time_signature %% 2 == 0, "binary", "non-binary"),
+         key = c("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")[key + 1],
+         duration = duration_ms/1000,
+         across(.cols = c(key, mode, time_signature), as.factor)) %>%
+  select(-duration_ms)
+
+```
+
+## Exploratory data analysis
+
+Now that we have a dataset with the musical features of metal songs (`r nrow(all_tracks_features)` songs from `r length(unique(all_tracks_features$artists_name))` artists), let’s do some exploratory data analysis! The dataset is in a *tidy* format where each row is a metal song, and each column is a musical feature (descriptions were mostly copied from *Spotify* API documentation on [audio features](https://developer.spotify.com/documentation/web-api/reference/#/operations/get-audio-features) and [audio analysis](https://developer.spotify.com/documentation/web-api/reference/#/operations/get-audio-analysis)):
+
++ **`danceability`**: Danceability describes how suitable a track is for dancing based on a combination of musical elements including tempo, rhythm stability, beat strength, and overall regularity. A value of 0.0 is least danceable and 1.0 is most danceable.
++ **`energy`**: Energy is a measure from 0.0 to 1.0 and represents a perceptual measure of intensity and activity. Typically, energetic tracks feel fast, loud, and noisy. For example, death metal has high energy, while a Bach prelude scores low on the scale. Perceptual features contributing to this attribute include dynamic range, perceived loudness, timbre, onset rate, and general entropy.
++ **`key`**: The key the track is in. Integers map to pitches using standard Pitch Class notation. E.g. 0 = C, 1 = C♯/D♭, 2 = D, and so on. If no key was detected, the value is -1. [*In the dataset `key` is coded using standard pitch class notation*]
++ **`key_confidence`**: The confidence, from 0.0 to 1.0, of the reliability of the `key`.
++ **`loudness`**: The overall loudness of a track in decibels (dB). Loudness values are averaged across the entire track and are useful for comparing relative loudness of tracks. Loudness is the quality of a sound that is the primary psychological correlate of physical strength (amplitude). Values typically range between -60 and 0 db.
++ **`mode`**: Mode indicates the modality (major or minor) of a track, the type of scale from which its melodic content is derived. Major is represented by 1 and minor is 0.  [*In the dataset `mode` is coded as "major" (1) and "minor" (0)*]
++ **`mode_confidence`**: The confidence, from 0.0 to 1.0, of the reliability of the `mode`.
++ **`speechiness`**: Speechiness detects the presence of spoken words in a track. The more exclusively speech-like the recording (e.g. talk show, audio book, poetry), the closer to 1.0 the attribute value. Values above 0.66 describe tracks that are probably made entirely of spoken words. Values between 0.33 and 0.66 describe tracks that may contain both music and speech, either in sections or layered, including such cases as rap music. Values below 0.33 most likely represent music and other non-speech-like tracks.
++ **`instrumentalness`**: Predicts whether a track contains no vocals. "Ooh" and "aah" sounds are treated as instrumental in this context. Rap or spoken word tracks are clearly "vocal". The closer the instrumentalness value is to 1.0, the greater likelihood the track contains no vocal content. Values above 0.5 are intended to represent instrumental tracks, but confidence is higher as the value approaches 1.0.
++ **`valence`**: A measure from 0.0 to 1.0 describing the musical positiveness conveyed by a track. Tracks with high valence sound more positive (e.g. happy, cheerful, euphoric), while tracks with low valence sound more negative (e.g. sad, depressed, angry).
++ **`tempo`**: The overall estimated tempo of a track in beats per minute (BPM). In musical terminology, tempo is the speed or pace of a given piece and derives directly from the average beat duration.
++ **`tempo_confidence`**: The confidence, from 0.0 to 1.0, of the reliability of the `tempo`.
++ **`time_signature`**: An estimated time signature. The time signature (meter) is a notational convention to specify how many beats are in each bar (or measure). The time signature ranges from 3 to 7 indicating time signatures of "3/4", to "7/4". [*In the dataset `time_signature` is coded as "binary" (2/4 and 4/4) or "non-binary" (3/4, 5/4, and 7/4)*]
++ **`time_signature_confidence`**: The confidence, from 0.0 to 1.0, of the reliability of the `time_signature`.
++ **`duration`**: The duration of the track in seconds.
++ **`id`**: The Spotify ID for the track.
++ **`name`**: The name of the track
++ **`artists_name`**: The artists of the track
++ **`Metal type`**: Whether the song comes from a "progressive" or "generic" metal playlist.
+
+
+### Continuous features
+
+I started with an inspection of the numerical features of the metal songs, as shown in the figure below. Most of these features are skewed and deviate strongly from a normal distribution (except perhaps for the `confidence_mode` feature), and this similarly for both types of metal songs.
+
+At the same time, examining the distribution of these features separately for each type of metal song highlights some interesting differences. For example, we can see that progressive songs tend to be longer overall, more instrumental, and contain fewer "spoken" parts (i.e., lower `speechiness').
+
+```{r, echo = FALSE, out.width = "100%"}
+
+# Distribution of numeric features
+all_tracks_features %>%
+  select(where(is.numeric), `Metal type`) %>%
+  pivot_longer(cols = -`Metal type`, names_to = "feature") %>%
+  mutate(feature = str_replace_all(str_to_sentence(feature), "_", " ")) %>%
+  ggplot(aes(x = value, fill = `Metal type`)) +
+  geom_density(alpha = 1/2, color = NA) +
+  scale_fill_viridis_d(option = "plasma", end = .8) +
+  labs(y = "Density",
+       title = "Distribution of musical continuous features as function of metal type") +
+  facet_wrap(~feature, scales = "free", ncol = 3) +
+  theme_light() +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.title.x = element_blank(),
+        legend.position = "bottom")
+
+```
+
+As a second step, I took a look at the statistics summary of the different musical features. Examination of the table below shows that most of the songs have a high `energy` (median = `r round(median(all_tracks_features$energy), 2)`), which is not surprising for metal songs. However, it is interesting noticing that the minimum of `energy` is `r format(round(min(all_tracks_features$energy), 5), scientific = FALSE)` (what seems very low!). Careful investigation showed that this value corresponded to the song *`r all_tracks_features$name[all_tracks_features$energy == min(all_tracks_features$energy)]`* from *`r all_tracks_features$artists_name[all_tracks_features$energy == min(all_tracks_features$energy)]`*, which has a duration of *`r paste(lubridate::duration(all_tracks_features$duration[all_tracks_features$energy == min(all_tracks_features$energy)], units = "seconds"))`*. That sounds surprising to have such a long song with such a low energy level. Listening to the track reveals the presence of two hidden songs, each preceded by approximately 15 and 13 minutes of silence. The fact that most of the track is just silence explains why the `energy` level is so low.
+
+Another case of tracks with a low energy level represents what I would call "transition" songs. For example, the songs  *Solve* from *Zeal and Ardor* and *The Hummer* from *Devin Townsend* have an `energy` of `r all_tracks_features %>% filter(name == "Solve", artists_name == "Zeal & Ardor") %>% pull(energy)` and `r format(all_tracks_features %>% filter(name == "The Hummer", artists_name == "Devin Townsend") %>% pull(energy), scientific = FALSE)`, respectively.
+
+Therefore, low `energy` level is likely to reflect tracks with hidden songs or corresponding to "transition" songs. To avoid that these songs, which represent specific cases, influence the construction of the model, any track with an `energy` below .05 will be removed from the final dataset.
+
+```{r, echo = FALSE}
+
+library(gt)  # allows creating awesome tables
+
+# Statistic summary of numeric features
+continuous_features_summary <-
+  all_tracks_features %>%
+  rename_with(.cols = dplyr::contains("_"), ~ str_replace_all(.x, "_", " ")) %>%
+  select(where(is.numeric)) %>%
+  summarise(across(everything(),
+                   list(median = median, min = min, max = max),
+                   .names = "{.fn}_{.col}")) %>%
+  pivot_longer(cols = everything(), names_sep = "_", names_to = c("fun", "feature")) %>%
+  pivot_wider(names_from = "feature", values_from = "value")
+
+continuous_features_summary %>%
+  gt(caption = "Summary statistics of musical continuous features",
+     rowname_col = "fun") %>%
+  fmt_number(
+    columns = everything(),
+    decimals = 2
+  )
+
+```
+
+Now taking a look at the `speechiness` and `instrumentalness` features, we see that median values are really low (`r round(median(all_tracks_features$speechiness), 2)` and `r round(median(all_tracks_features$instrumentalness), 2)`, respectively). The figure below shows that the majority of the song has a `speechiness` below .5 and an `instrumentalness` ranging from 0 to 1 (see the blue dots in the figure below). We can see a few cases with `speechiness` higher than .5. These are most likely "spoken" songs (see pink triangles in the figure). There is also one specific case with both high `instrumentalness` and `speechiness` (see the orange square in the figure). This track is the song *Daybreak, Pt. 2* (from *RPWL*) and is composed of clock sounds with bird vocalizations. To avoid the influence of songs that are mainly spoken (e.g., "spoken transition" songs) in the construction of the model, it seems appropriate to keep only the songs with `speechiness` below .5.
+
+```{r, echo = FALSE}
+
+# Scatter plot of instrumentalness vs. speechiness
+all_tracks_features %>%
+  mutate(color = case_when(speechiness < .5 ~ "A",
+                           speechiness > .5 & instrumentalness < .5 ~ "B",
+                           speechiness > .5 & instrumentalness > .5 ~ "C")) %>%
+  ggplot() +
+  aes(x = speechiness, y = instrumentalness, color = color) +
+  geom_point(aes(shape = color), show.legend = FALSE) +
+  scale_color_viridis_d(option = "plasma", end = .8) +
+  labs(x = "Speechiness",
+       y = "Instrumentalness") +
+  theme_light() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+Another interesting observation from the statistics summary table is that the shortest song is *`r all_tracks_features$name[all_tracks_features$duration == min(all_tracks_features$duration)]`* from *`r all_tracks_features$artists_name[all_tracks_features$duration == min(all_tracks_features$duration)]`*, which is `r paste(lubridate::duration(min(all_tracks_features$duration), units = "seconds"))` long. When listening to the song it is clearly what I described early as a "transition" song. *But how to detect theses "transition" songs?*
+
+Looking at the relation between `energy`, `duration`, and `instrumentalness` in the figure below might help identify these "transition" songs (only songs with a duration up to 1000 seconds are displayed). We see that the majority of the songs are between 120 and 500 seconds long, covering the whole range of the `instrumentalness` space, and have a high level of `energy.` Conversely, songs shorter than 120 seconds have a lower level of `energy` overall, and are more spread: most of the songs have either high or low `instrumentalness`. However, I am not really convinced that such a pattern distinguish "transition" songs from regular songs that are just shorter, softer, and/or instrumental (especially for progressive songs). Thus, I won't use the duration feature to filter the data.
+
+```{r, echo = FALSE}
+
+# Scatter plot of instrumentalness vs. duration vs. energy
+all_tracks_features %>%
+  filter(duration < 1000) %>%
+  ggplot() +
+  aes(x = duration, y = instrumentalness, color = energy) +
+  geom_point() +
+  viridis::scale_color_viridis(option = "D", discrete = FALSE) +
+  labs(x = "Duration",
+       y = "Instrumentalness",
+       color = "Energy") +
+  theme_light() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+Finally, I had a look at the correlation between all the continuous features to determine whether it worth it to combine highly correlated predictors before starting modeling. That would reduce the complexity of the model and make its interpretation a little easier.
+
+We can see in the figure below showing the correlation between all continuous features the presence of two clusters (larger circle means stronger correlation and the color indicates the sign of the correlation). The first cluster is composed of `key_confidence` and `mode_confidence` (*r* = `r round(cor(all_tracks_features$key_confidence, all_tracks_features$mode_confidence), 2)`), and the second one of `energy` and `loudness` (*r* = `r round(cor(all_tracks_features$energy, all_tracks_features$loudness), 2)`). Given the high correlation between the features forming the different clusters, the variables will be combine to reduce the number of predictors (`energy` and `loudness` will become `intensity`, and `key_confidence` and `mode_confidence` will become `key_mode_confidence`).
+
+```{r, echo = FALSE}
+
+# Correlation matrix between predictors
+cor_mat <- cor(select(all_tracks_features, where(is.numeric)))
+colnames(cor_mat) <- str_to_sentence(str_replace_all(colnames(cor_mat), "_", " "))
+rownames(cor_mat) <- str_to_sentence(str_replace_all(rownames(cor_mat), "_", " "))
+
+# Correlation plot between predictors
+corrplot::corrplot(cor_mat, col = viridis::plasma(n = 200, begin = 0.2, end = 0.8),
+                   tl.col = "black",
+                   order = "hclust")
+
+```
+
+### Categorical features
+
+Considering now the categorical features, we can see from the two figures below that there approximately are as many songs in major than in minor mode. There are also way more songs with a binary time signature. When we look at these variables separately for each metal category, the figure shows that generic songs are more frequently played in major mode and progressive songs are characterized by more non-binary rhythmic structure.
+
+```{r, echo = FALSE}
+
+# Bar plot of of mode and time signature
+all_tracks_features %>%
+  select(`Metal type`, Mode = mode, `Time signature` = time_signature) %>%
+  pivot_longer(cols = -`Metal type`, names_to = "Percentage") %>%
+  group_by(Percentage, `Metal type`) %>%
+  summarise(n = n(),
+            value = value) %>%
+  group_by(Percentage, `Metal type`, value) %>%
+  summarise(proportion = n()/first(n)) %>%
+  ggplot(aes(x = value,
+             y = proportion,
+             fill = `Metal type`)) +
+  geom_col(position = "dodge", alpha = 1/2, width = 1/3) +
+  coord_cartesian(ylim = c(0, 1)) +
+  scale_fill_viridis_d(option = "plasma", end = .8) +
+  facet_wrap(~Percentage, scales = "free") +
+  theme_light() +
+  labs(y = "Proportion") +
+  theme_light() +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.title.x = element_blank(),
+        legend.position = "bottom")
+```
+
+Finally, we can examine the most frequently used keys in the major and minor modes. For the major mode, we see in the figure below that all keys are used overall as frequently, except A# and D#. The same is true for the minor mode, except that the keys G# and D# minor are used less frequently. When we consider the metal category, we can see that some keys are used less in progressives than generic metal songs (and vice versa), but the difference is not that important.
+
+```{r, echo = FALSE}
+
+library(see) # to access the coor_radar function and theme
+
+# Bar plot (with 'radar' coordinates) of mode and key
+all_tracks_features %>%
+  select(`Metal type`, key, mode) %>%
+  group_by(`Metal type`, mode) %>%
+  summarise(n = n(),
+            key = key) %>%
+  group_by(key, `Metal type`, mode) %>%
+  summarise(Percentage = n()/first(n)) %>%
+  ggplot() +
+  aes(x = key,
+      y = Percentage,
+      fill = `Metal type`,
+      group = `Metal type`)+
+  geom_polygon(size = 1, alpha = .5) +
+  scale_y_continuous(labels = scales::percent, limits = c(0, .175)) +
+  scale_fill_viridis_d(option = "plasma", end = .8) +
+  facet_wrap(~mode) +
+  coord_radar() +
+  theme_radar() +
+  theme(axis.title.x = element_blank(),
+        axis.title.y = element_blank())
+
+```
+
+### Summary
+
+Based on the results of the exploratory data analysis, the following steps will be applied before starting modeling the data:
+
+1. Song with `speechiness` > .5 or `energy` < .05 will be removed from the dataset.
+2. All numerical predictors will be normalized (using the `bestNormalize` package, which allows several transformation methods to be performed and the best one to be applied).
+3. `key_confidence` and `mode_confidence` will be combined into a single predictor (`key_mode_confidence`) by taking the mean of their normalized values.
+4. `loudness` and `energy` will be combined into a single predictor (`intensity`) by taking the mean of their normalized values.
+
+Finally, the EDA gave us a hint of the predictors that might contribute to the distinction between generic and progressive metal songs. For instance, we observed that progressive songs are longer, softer or with less energy, more instrumental, and with less spoken content. It seems that my initial intuition was not far from reality.
+
+## Build models
+
+In this section, I will build a model trying to predict the type of the metal songs (*progressive* or *generic*). Note that the modeling is strongly influenced by the `tidymodels` approach (for more information, see [https://www.tidymodels.org/](https://www.tidymodels.org/)). Furthermore, since I want to make predictions about the classification of a binary element, I chose to start by applying a logistic regression model.
+
+### Spliting the data
+
+The first step is to split the initial dataset into "not for testing" and "testing" datsets. The not for testing and testing datasets correspond to 80% and 20% of the original dataset, respectively. The not for testing set has been further split in training (80%) and validation (20%) datasets. The training set will be used to fit different models and the validation set to measure the performance of these models. Finally, once the best model has been determined, the test set will be used to test the final model on data not used for training.
+
+```{r}
+
+library(tidymodels)    # collection of packages for modeling using tidyverse principles
+library(bestNormalize) # required to find the best normalization for a continuous predictor
+library(vip)           # to extract predictor importance from models
+
+set.seed(11689)
+
+# Format the data based on outcome of the EDA
+final_metal_data <-
+  all_tracks_features %>%
+  mutate(category = as.factor(`Metal type`)) %>%
+  # removes variables none of interest for the modeling
+  select(-c(name, artists_name, id, analysis_url, `Metal type`))
+
+# Split the data into training and test sets
+metal_data_split <- initial_split(final_metal_data, strata = category)
+
+metal_data_train <- training(metal_data_split) # The training set (80% of the initial dataset)
+metal_data_validation <- validation_split(metal_data_train, 
+                                          strata = category, 
+                                          prop = 0.80)
+metal_data_test <- testing(metal_data_split)   # The test set (20% of the initial dataset)
+
+```
+
+### Model 1: penalized logistic regression
+
+Classifying metal songs into *generic* and *progressive* categories represents a good use case for a logistic regression model. So let's start building a logistic regression model using the `glmnet` package.
+
+Since the number of predictors we need to enter into the model is not that small, I will use the penalty function that penalizes the predictors by shrinking those less important. I will also set the mixture feature to 1, telling the model to use the *lasso* penalty method which can potentially eliminate irrelevant predictors and prefer simpler models. As it is not clear yet what the best penalty level to apply is, that parameter will be tuned later.
+
+```{r}
+
+# Specify the model (categorization with logistic regression)
+glm_logistic_model <-
+  logistic_reg(penalty = tune(), mixture = 1) %>%
+  set_engine("glmnet")
+
+```
+
+Next, I defined some processing steps using a *recipe*. The steps are those described in the summary of the EDA, with the addition of the dummification of the nominal predictors as final step.
+
+```{r}
+
+# Create a recipe
+metal_data_recipe <-
+  recipe(category ~ ., data = metal_data_train) %>%
+  # Remove songs that are potentially only spoken
+  step_filter(speechiness < .5,
+              energy > 0.05) %>%
+  # Normalize numeric predictors using the 'bestNormalize' package
+  step_best_normalize(all_numeric_predictors()) %>%
+  # Combine 'key_confidence'  and 'mode_confidence' into a new predictor
+  # 'key_mode_confidence and combine 'loudness' and 'enery' intro a new
+  # predictor 'intensity'
+  step_mutate(key_mode_confidence = (key_confidence + mode_confidence)/2,
+              intensity = (loudness + energy) / 2) %>%
+  # Removes predictors used to created the new predictors above
+  step_rm(key_confidence, mode_confidence, loudness, energy) %>%
+  step_dummy(all_nominal_predictors())
+
+```
+
+Now that the recipe is ready, it is time to create the workflow for our modeling process. This simply requires the creation of a *workflow* object to which we pass the logistic model and the recipe.
+
+```{r}
+
+# Creating the initial workflow
+glm_logistic_wfl <-
+  workflow() %>%
+  add_model(glm_logistic_model) %>%
+  add_recipe(metal_data_recipe)
+
+```
+
+As explained earlier, it is important to consider the large number of predictors to be included in the model. We have `r sum(metal_data_recipe$term_info$type == "numeric" & metal_data_recipe$term_info$role == "predictor")` numeric and `r sum(metal_data_recipe$term_info$type == "nominal" & metal_data_recipe$term_info$role == "predictor")` nominal predictors. With the dummification of the nominal predictors, we end up with `r ncol( metal_data_recipe %>% prep() %>% juice())-1` predictors. To avoid overfitting or having a better performing model simply because it includes a lot of predictors, it would be good to apply a penalty.
+
+The appropriate penalty level is tuned using a grid search covering values from 0.0001 to 0.30, approximately. Then, for each penalty level, the logistic regression model is fitted to the training dateset., and its performance is evaluated using the validation dateset.
+
+```{r, cache = TRUE}
+
+# Creating a penalty grid
+glm_logistic_penalty_grid <-
+  tibble(penalty = 10^seq(-4, -0.5, length.out = 40))
+
+# Train and tune the model
+glm_logistic_res <-
+  glm_logistic_wfl %>% 
+  tune_grid(metal_data_validation,
+            grid = glm_logistic_penalty_grid,
+            control = control_grid(save_pred = TRUE),
+            metrics = metric_set(roc_auc))
+
+# Best model values
+glm_logistic_res_best <-
+  glm_logistic_res %>%
+  show_best(metric = "roc_auc", n = 1)
+
+# Minimal model values
+glm_logistic_res_minimal <-
+  glm_logistic_res %>%
+  collect_metrics() %>%
+  filter(penalty < .007) %>%
+  arrange(desc(penalty)) %>%
+  slice(1)
+
+```
+
+The figure below shows model performance for each penalty level, using the area under the ROC curve (AUC) as a performance indicator. The model with the best performance (AUC = `r glm_logistic_res_best$mean`, indicated by a vertical black line) is the model with a penalty of `r glm_logistic_res_best$penalty`. At the same time, examining the following models with a higher penalty level shows that they perform similarly to the best model. Thus, it would be appropriate to select a model with a higher penalty, such as the model indicated by a vertical blue dashed line, which is characterized by an AUC of `r round(glm_logistic_res_minimal$mean, 4)`. The choice to prefer the less complex model (called hereafter the "minimal" model) is supported by the second figure below, which shows the AUC for both models and indicates that they perform equally well in predicting song category.
+
+```{r, echo = FALSE}
+
+# Plot the performance of the models with different tuning
+glm_logistic_res %>%
+  collect_metrics() %>%
+  mutate(Model = "Logistic regression (Instrumentalness as category)") %>%
+  ggplot(aes(x = penalty, y = mean)) +
+  geom_vline(xintercept = glm_logistic_res_best$penalty) +
+  geom_vline(xintercept = glm_logistic_res_minimal$penalty,
+             color = "blue", linetype = "dashed") +
+  geom_point() +
+  geom_line() +
+  ylab("Area under the ROC Curve") +
+  scale_x_log10(labels = scales::label_number()) +
+  theme_light()
+
+# Collect predictions to plot roc curve (best logistic model)
+glm_logistic_auc_best <-
+  glm_logistic_res %>%
+  collect_predictions(parameters = glm_logistic_res_best) %>%
+  roc_curve(category, .pred_Generic) %>%
+  mutate(Model = str_wrap("Logistic regression (best)", width = 20))
+
+# Collect predictions to plot roc curve (best minimal model)
+glm_logistic_auc_minimal <-
+  glm_logistic_res %>%
+  collect_predictions(parameters = glm_logistic_res_minimal) %>%
+  roc_curve(category, .pred_Generic) %>%
+  mutate(Model = str_wrap("Logistic regression (minimal)", width = 20))
+
+# Plot the AUC of the best and minimal logistic regression models
+bind_rows(glm_logistic_auc_best,
+          glm_logistic_auc_minimal)%>%
+  ggplot(aes(x = 1 - specificity, y = sensitivity, color = Model)) + 
+  geom_path(lwd = 1.25, alpha = 0.8) +
+  geom_abline(lty = 3) + 
+  coord_equal() +
+  scale_color_viridis_d(option = "plasma", end = .8) +
+  theme_light() +
+  theme(legend.key.size = unit(1, "cm"))
+
+```
+
+To better understand what distinguishes progressive from generic metal songs, we can examine the importance of the different predictors in the "minimal" model. We see in the figure below that  `duration`, `intensity` (i.e., the combination of `loudness` and `energy`), `duration`, and `time_signature` are the predictors that contribute most to distinguishing the two categories of metal songs. For example, songs are more likely to be classified as progressive when they are less intense, longer, and with a non-binary time signature. Confidence of time signature, `speechiness`, and `instrumentalness` also contribute to distinguishing the two categories, but to a lower extent.
+
+```{r, echo = FALSE}
+
+# Compute the importance of the predictors in the minimal logistic regression model
+glm_logistic_minimal_pred_importance <-
+  finalize_workflow(glm_logistic_wfl, glm_logistic_res_minimal) %>%
+  fit(metal_data_train) %>%
+  extract_fit_parsnip() %>%
+  vi_model(lambda = glm_logistic_res_minimal$penalty) %>%
+  arrange(desc(Importance)) %>%
+  mutate(Variable =
+           fct_reorder(
+             str_to_sentence(str_replace_all(Variable, "[_.]", " ")),
+             Importance
+           ),
+         Model = "minimal") %>%
+  filter(Importance > 0)
+
+# Plot the importance analysis (minimal logistic regression model)
+glm_logistic_minimal_pred_importance %>%
+  mutate(Sign = if_else(Sign == "POS", "Positive", "Negative")) %>%
+  ggplot() +
+  aes(x = Importance, y = Variable, fill = Sign) +
+  geom_col(color = "white") +
+  scale_x_continuous(expand = c(0, 0), limits = c(0, 1), breaks = seq(0, 1, .20)) +
+  scale_fill_viridis_d(option = "plasma", end = .8) +
+  theme_light() +
+  labs(y = NULL,
+       x = "Importance (regularized coefficient)")
+
+```
+
+```{r, echo = FALSE}
+
+# The metrics to compute for the minimal logistic regression model
+metrics_ssap <- metric_set(sensitivity, specificity, accuracy)
+
+# Compute the metrics for the minimal logistic regression model
+glm_logistic_minimal_metrics <-
+  glm_logistic_res %>%
+  collect_predictions(parameters = glm_logistic_res_minimal) %>%
+  metrics_ssap(truth = category,
+               estimate = factor(if_else(.pred_Generic > 0.5, "Generic", "Progressive")))
+
+```
+
+The outcome of the penalized logistic regression indicates that the "minimal" model does a fair job in classifying the metal songs into their respective category, with a sensitivity of `r round(filter(glm_logistic_minimal_metrics, .metric == "sensitivity") %>% pull(.estimate) * 100, 2)`% (the percentage of *progressive* songs correctly classified as *progressive*) and a specificity of `r round(filter(glm_logistic_minimal_metrics, .metric == "specificity") %>% pull(.estimate) * 100, 2)`% (the percentage of songs not being progressive correctly classified as *generic*). Overall, the accuracy of the classification is far superior to chance (accuracy of `r round(filter(glm_logistic_minimal_metrics, .metric == "accuracy") %>% pull(.estimate) * 100, 2)`%), but there is also clearly room for improvement. In the next step, we will see whether we can improve the model performance by adding interaction terms.
+
+### Model 2: penalized logistic regression with 2- and 3-way interactions
+
+The first modeling step only considered the linear addition of different predictors while ignoring their interactions. In this second step, we will compare the performance between three models: penalized logistic regression without interaction, with all 2-way interactions, and all 3-way interactions between the predictors.
+
+```{r, cache = TRUE}
+
+# Create recipes for the new models
+metal_data_recipe_2_way <-
+  metal_data_recipe %>%
+  step_interact(category ~ .^2)
+
+metal_data_recipe_3_way <-
+  metal_data_recipe %>%
+  step_interact(category ~ .^3)
+
+# Creating a workflow for the new recipes
+glm_logistic_wfl_2_way <-
+  workflow() %>%
+  add_model(glm_logistic_model) %>%
+  add_recipe(metal_data_recipe_2_way)
+
+glm_logistic_wfl_3_way <-
+  workflow() %>%
+  add_model(glm_logistic_model) %>%
+  add_recipe(metal_data_recipe_3_way)
+
+# Train and tune the models
+glm_logistic_res_2_way <-
+  glm_logistic_wfl_2_way %>% 
+  tune_grid(metal_data_validation,
+            grid = glm_logistic_penalty_grid,
+            control = control_grid(save_pred = TRUE),
+            metrics = metric_set(roc_auc))
+
+glm_logistic_res_3_way <-
+  glm_logistic_wfl_3_way %>% 
+  tune_grid(metal_data_validation,
+            grid = glm_logistic_penalty_grid,
+            control = control_grid(save_pred = TRUE),
+            metrics = metric_set(roc_auc))
+```
+
+```{r, echo = FALSE}
+
+# Collect and combine the metrics of the 2-way and 3-way interactions models
+glm_logistic_res_int <- 
+  bind_rows(
+    glm_logistic_res_2_way %>%
+      collect_metrics() %>%
+      mutate(Model = str_wrap("Logistic regression (2-way interactions)\n", width = 20)),
+    glm_logistic_res_3_way %>%
+      collect_metrics() %>%
+      mutate(Model = str_wrap("Logistic regression (3-way interactions)\n", width = 20))
+  ) %>%
+  arrange(desc(mean))
+
+# Best model values
+glm_logistic_res_int_best <-
+  bind_rows(
+    mutate(glm_logistic_res_2_way %>%
+             show_best(n = 1), int = "2-way"),
+    mutate(glm_logistic_res_3_way %>%
+             show_best(n = 1), int = "3-way")
+  ) %>%
+  slice_tail(n = 1)
+
+# Minimal model values
+glm_logistic_res_int_minimal <-
+  bind_rows(
+    mutate(glm_logistic_res_2_way %>%
+      collect_metrics(), int = "2-way"),
+    mutate(glm_logistic_res_3_way %>%
+      collect_metrics(), int = "3-way")
+  ) %>%
+  filter(mean > .814) %>%
+  arrange(mean, int) %>%
+  slice(n = 1)
+
+```
+
+Using the same performance indicator as before (AUC), the figure below indicates that 2-way and 3-way interactions models perform similarly, except for when a small penalty is applied where the 2-way model performs better than the 3-way model. The model with the best performance (AUC = `r round(glm_logistic_res_int_best$mean, 4)`) is a model with `r glm_logistic_res_int_best$int` interactions and a penalty of `r format(round(glm_logistic_res_int_best$penalty, 6), scientific = FALSE)`, indicated by a black vertical line in the figure. However, as in the first step where interactions were not considered, it seems to be a good idea to consider a model with larger penalty as they have similar level of performance, this for both 2-way and 3-way interactions models. Thus, the model with a penalty of `r round(glm_logistic_res_int_minimal$penalty, 6)` and with `r glm_logistic_res_int_minimal$int` interactions is preferred over the best model as it is less complex and have similar performances compared to the the best model (`r round(glm_logistic_res_int_minimal$mean, 4)` versus `r round(glm_logistic_res_int_best$mean, 4)`).
+
+```{r, echo = FALSE}
+
+# Plot the performance of the models with different tuning
+glm_logistic_res_int %>%
+  ggplot(aes(x = penalty, y = mean, fill = Model, color = Model)) +
+  geom_line() +
+  geom_point() +
+  geom_vline(xintercept = glm_logistic_res_int_best$penalty) +
+  geom_vline(xintercept = glm_logistic_res_int_minimal$penalty,
+             color = "blue", linetype = "dashed") +
+  scale_color_viridis_d(option = "plasma", end = .8) +
+  scale_x_log10(labels = scales::label_number()) +
+  ylab("Area under the ROC Curve") +
+  theme_light() +
+  theme(legend.key.size = unit(1, "cm"))
+
+```
+
+Finally, when comparing the area under the ROC curve for the two models (minimal without interactions and minimal with `r glm_logistic_res_int_minimal$int` interactions), we can see in the figure below that adding interactions does not really improve the performance of the model. As the two models perform similarly well, it is better to prefer the simpler model, that is, the minimal model without interaction.
+
+```{r, echo = FALSE}
+
+# Collect predictions to plot roc curve (best model [3-way interactions])
+glm_3_way_auc_best <-
+  glm_logistic_res_3_way %>%
+  collect_predictions(parameters = glm_logistic_res_int_best) %>%
+  roc_curve(category, .pred_Generic) %>%
+  mutate(Model = str_wrap("Logistic regression (best 2-way)", width = 20))
+
+# Collect predictions to plot roc curve (minimal model [2-way interactions])
+glm_2_way_auc_minimal <- 
+  glm_logistic_res_2_way %>%
+  collect_predictions(parameters = glm_logistic_res_int_minimal) %>%
+  roc_curve(category, .pred_Generic) %>%
+  mutate(Model = str_wrap("Logistic regression (2-way interaction)", width = 20))
+
+# Plot the AUC of the best and minimal logistic regression models (with interactions)
+bind_rows(glm_logistic_auc_minimal,
+          glm_2_way_auc_minimal) %>%
+  mutate(Model = str_replace_all(Model, "minimal", "no interaction")) %>%
+  ggplot(aes(x = 1 - specificity, y = sensitivity, color = Model)) + 
+  geom_path(lwd = 1.25, alpha = 0.8) +
+  geom_abline(lty = 3) + 
+  coord_equal() +
+  scale_color_viridis_d(option = "plasma", end = .8) +
+  theme_light() +
+  theme(legend.key.size = unit(1, "cm"))
+
+```
+
+### Model 3: random-forest
+
+The third and last model I will build to address the problem of metal songs classification is a random-forest model using the `ranger` engine. The number of predictors randomly selected for each node and the node size (minimum number of data points to keep splitting) will be tuned later and are then not defined yet.
+
+```{r}
+
+# Random-forest techniques are computationally heavy and running them on
+# multiple threads (using different) cores help speeding up the process. Here,
+# 75% of the cores available are used for computation.
+cores <- parallel::detectCores()*.75
+
+# Specify the model (categorization with random-forest)
+randf_model <-
+  rand_forest(mtry = tune(), min_n = tune(), trees = 1000) %>% 
+  set_engine("ranger", num.threads = cores) %>%
+  set_mode("classification")
+
+```
+
+Compared to the penalized logistic regression, the recipe for the random-forest model is simpler as there is no specific need to transform the data before starting modeling. Then, the model and the recipe are integrated into a workflow object before tuning the parameters.
+
+
+```{r}
+
+# Create the recipe
+randf_recipe <-
+  recipe(category ~ ., data = metal_data_train) %>%
+  # Remove songs that are potentially only spoken
+  step_filter(speechiness < .5,
+              energy > .05) %>%
+  # Combine 'key_confidence'  and 'mode_confidence' into a new predictor
+  # 'key_mode_confidence and combine 'loudness' and 'energy' intro a new
+  # predictor 'intensity'
+  step_mutate(key_mode_confidence = (key_confidence + mode_confidence)/2,
+              intensity = (loudness + energy) / 2) %>%
+  # Removes predictors used to created the new predictors above
+  step_rm(key_confidence, mode_confidence, loudness, energy)
+
+# Specify the workflow (as random-forest does not require specific transformation,
+# the data are passed as they are)
+randf_workflow <-
+  workflow() %>%
+  add_model(randf_model) %>%
+  add_recipe(randf_recipe)
+
+```
+
+The tuning of the model will rely on a grid with the number of predictors randomly selected for each node ranging from 1 to `r sum(randf_recipe$term_info$role == "predictor") - 2` (all predictors) and with the minimum number of data points to keep splitting ranging from 10 to 50, by steps of 10.
+
+```{r, cache = TRUE}
+
+# Create the grid with the different tunings of 'mtry' and 'min_n'
+randf_grid  <- grid_regular(mtry(c(1, sum(randf_recipe$term_info$role == "predictor") - 2)),
+                            min_n(c(10, 50)),
+                            levels = c(sum(randf_recipe$term_info$role == "predictor") - 2, 5))
+
+set.seed(37443)
+
+# Train and tune the model
+randf_res <-
+  randf_workflow %>%
+  tune_grid(metal_data_validation,
+            grid = randf_grid,
+            control = control_grid(save_pred = TRUE),
+            metrics = metric_set(roc_auc))
+
+randf_res_best <-
+  randf_res %>%
+  show_best(metric = "roc_auc", n = 1)
+
+randf_res_minimal <-
+  randf_res %>%
+  collect_metrics() %>%
+  filter(mtry == 2, min_n == 10)
+
+```
+
+From the figure below showing the area under the ROC curve for all different tunnings, we can tell that overall low minimal node size leads to better performance, and that selecting randomly 2 to 4 predictors for each node lead also to better performance. The model performing the best is the one with `r randf_res_best$mtry` predictors selected for each node and a minimal node size of `r randf_res_best$min_n` (AUC = `r round(pull(randf_res_best, mean), 4)`). This model will then be used in further analysis.
+
+```{r, echo = FALSE}
+
+# Plot the performance of the random-forest model with different tunings
+autoplot(randf_res) +
+  theme_light() +
+  coord_cartesian(ylim = c(0.82, 0.84)) +
+  scale_color_viridis_d(option = "plasma", end = .8) +
+  scale_x_continuous(breaks = c(0:15))
+
+```
+
+Comparing the best random-forest model to the minimal logistic regression without interaction selected in the previous step, we can see in the figure below that the former is performing better even though the difference is not that big. I nonetheless found the difference is interesting enough to consider the random-forest as the "final" model, that is the one that maximizes performance while minizing model complexity.
+
+```{r, echo = FALSE}
+
+randf_res_auc <-
+  randf_res %>%
+  collect_predictions(parameters = randf_res_minimal) %>%
+  roc_curve(category, .pred_Generic) %>%
+  mutate(Model = str_wrap("Random forest (minimal)", width = 15))
+
+bind_rows(randf_res_auc, glm_logistic_auc_minimal) %>% 
+  ggplot(aes(x = 1 - specificity, y = sensitivity, color = Model)) + 
+  geom_path(lwd = 1.25, alpha = 0.8) +
+  geom_abline(lty = 3) + 
+  coord_equal() +
+  scale_color_viridis_d(option = "plasma", end = .8) +
+  theme_light() +
+  theme(legend.key.size = unit(1, "cm"))
+
+```
+
+## Evaluate the final model
+
+My initial goal was build a model predicting whether a metal song is progressive or generic. We have first seen that penalized logistic regression did a fair job in classifying the songs, but adding interaction terms did not improve the performance of the model. Next, a random-forest model performed better in predicting the category of metal songs, even though the advantage compared to the penalized logistic regression model was not striking. I finally considered the random-forest model with `mtry` = `r randf_res_best$mtry`, `min_n` = `r randf_res_best$min_n`, and `trees` = 1000, as the "final" model. To evaluate its performance, I will fit one last time the model to the data not used for testing (i.e., training and validation datasets) and assess its ability to accurately predict the category of the songs using the test dataset.
+
+```{r, cache = TRUE}
+
+selected_randf_model <-
+  rand_forest(mtry = randf_res_best$mtry, min_n = randf_res_best$min_n, trees = 1000) %>%
+  set_engine("ranger", num.threads = cores, importance = "permutation") %>%
+  set_mode("classification")
+
+# Specify the workflow (as random-forest does not require specific transformation,
+# the data are passed as they are)
+selected_randf_workflow <-
+  randf_workflow %>%
+  update_model(selected_randf_model)
+
+set.seed(1029)
+
+# Fit
+randf_fit_test <-
+  selected_randf_workflow %>%
+  last_fit(metal_data_split)
+
+```
+
+As shown in the figure below, the performance of the model on the test data is very close to the performance on the validation dataset during the training phase. This is then a good sign that the model would classify new songs as accurately as during the training phase.
+
+```{r, echo = FALSE}
+
+randf_test_auc <-
+  randf_fit_test %>%
+  collect_predictions() %>%
+  roc_curve(category, .pred_Generic) %>%
+  mutate(Model = str_wrap("Random forest (test)", width = 15))
+
+randf_res_auc <-
+  randf_res_auc %>%
+  mutate(Model = str_wrap("Random forest (train)", width = 15))
+
+bind_rows(randf_test_auc, randf_res_auc) %>% 
+  ggplot(aes(x = 1 - specificity, y = sensitivity, color = Model)) + 
+  geom_path(lwd = 1.25, alpha = 0.8) +
+  geom_abline(lty = 3) + 
+  coord_equal() +
+  scale_color_viridis_d(option = "plasma", end = .8) +
+  theme_light() +
+  theme(legend.key.size = unit(1, "cm"))
+```
+
+```{r, echo = FALSE}
+
+metrics_ssap <- metric_set(sensitivity, specificity, accuracy)
+
+randf_metrics <-
+  randf_fit_test %>%
+  collect_predictions() %>%
+  metrics_ssap(truth = category,
+               estimate = .pred_class)
+
+```
+
+Importantly, even though the random-forest model performed the best, there is still room for improvement. The model is accurate `r round(filter(randf_metrics, .metric == "accuracy") %>% pull(.estimate) * 100, 2)`% of the time. That is a good start but that could also be better.
+
+At the same time, if we consider the perspective of providing finer genre information on song already classified as metal songs, the picture is somewhat different. Indeed, while sensitivity is about `r round(filter(randf_metrics, .metric == "sensitivity") %>% pull(.estimate) * 100, 0)`, specificity is around `r round(filter(randf_metrics, .metric == "specificity") %>% pull(.estimate) * 100, 0)`%. This means that the model does a better job in classifying actual generic metal songs as generic than actual progressive metal songs as progressive. In other words, if the goal is to add a new genre tag (i.e., "progressive" tag in the present case), it is important to ensure that non-progressive songs are not wrongly classified as progressive. The present model indeed produces less false positive (i.e., generic metal songs classified as progressive) than false negative (i.e., progressive songs detected as generic).
+
+Finally, it is interesting to note that when looking at the importance of the different predictors in the model, we see that the two main predictors are `duration` and `intensity` as it was the case in the logistic regression analysis. Next comes `speechiness` and `instrumentalness`, what is new compared to the logistic regression analysis. These could be summarized as indicator that progressive songs differ from generic metal songs by their duration, their intensity, their speechiness, and instrumentalness.
+
+```{r, echo = FALSE}
+
+randf_fit_test %>%
+  extract_fit_parsnip() %>%
+  vi_model() %>%
+  arrange(desc(Importance)) %>%
+  mutate(Variable = fct_reorder(
+    str_to_sentence(str_replace_all(Variable, "[_.]", " ")),
+    Importance
+  )) %>%
+  filter(Importance > 0) %>%
+  ggplot() +
+  aes(x = Importance, y = Variable, fill = Importance) +
+  geom_col(color = "white", show.legend = FALSE) +
+  scale_x_continuous(expand = c(0, 0), limits = c(0, .065)) +
+  viridis::scale_fill_viridis(option = "C", end = .8, discrete = FALSE) +
+  theme_light() +
+  labs(y = NULL,
+       x = "Importance")
+
+```
+
+## What can we learn from classification errors?
+
+If one wants to use the final model to define whether a metal song should be labeled as progressive, examining the misclassification of generic songs as progressive could help better understand the behavior of the model.
+
+**What if these songs were really "prog"?** After screening the generic songs that were classified with great confidence as progressive, I actually saw some band names that I was familiar with. For example, there's the instrumental version of the song *Our Decades in the Sun* by *Nightwish*. I've listened to this band a lot in the past and have always considered their songs have, in addition to their symphonic/power metal attributes, progressive elements. Considering the length of the songs (over 6 minutes) and the fact that it is instrumental, its classification as a progressive song is not surprising.
+
+However, I was surprised to see that a song by *Judas Priest* (one of the founding bands of heavy metal) was classified with high confidence as progressive. At the same time, the song (*Run Of The Mill*) is very long (over 8 minutes) and alternates between soft ballad-like parts and heavier moments. Finally, even if the song contains some sung parts, it is mainly instrumental. By combining these elements together, we can easily understand why the song is classified as progressive. Whether we should consider the song progressive is another matter, but at least we understand why the model made this choice.
+
+If we examine the distribution of the main musical features of the generic metal songs from the datatest set, we see in the figure below that those classified as progressive are longer, more instrumental, softer, contain fewer spoken content and have a less clear time signature. These are the characteristics that we have learned correspond to "progressive" metal songs. In the end, these misclassified generic metal songs might have some "prog" in them...
+
+```{r, echo = FALSE}
+final_data <-
+  all_tracks_features %>%
+  rename(category = `Metal type`) %>%
+  recipe(category ~ ., data = .) %>%
+  # Remove songs that are potentially only spoken
+  # Combine 'key_confidence'  and 'mode_confidence' into a new predictor
+  # 'key_mode_confidence and combine 'loudness' and 'energy' intro a new
+  # predictor 'intensity'
+  step_mutate(key_mode_confidence = (key_confidence + mode_confidence)/2,
+              intensity = (loudness + energy) / 2) %>%
+  # Removes predictors used to created the new predictors above
+  step_rm(key_confidence, mode_confidence, loudness, energy) %>%
+  prep() %>%
+  juice()
+
+wrong_progressive_id <-
+  randf_fit_test %>%
+  collect_predictions() %>%
+  filter(.pred_class == "Progressive" & category == "Generic")
+
+wrong_progressive_pred <-
+  final_data %>%
+  slice(wrong_progressive_id$.row) %>%
+  mutate(pred = wrong_progressive_id$.pred_class,
+         generic_pred = wrong_progressive_id$.pred_Progressive)
+
+correct_generic_id <-
+  randf_fit_test %>%
+  collect_predictions() %>%
+  filter(.pred_class == "Generic" & category == "Generic")
+
+correct_generic_pred <-
+  final_data %>%
+  slice(correct_generic_id$.row) %>%
+  mutate(pred = correct_generic_id$.pred_class,
+         generic_pred = correct_generic_id$.pred_Generic)
+
+bind_rows(correct_generic_pred,
+          wrong_progressive_pred) %>%
+  select(pred, intensity, duration, instrumentalness, speechiness, time_signature_confidence) %>%
+  pivot_longer(cols = -pred, names_to = "feature") %>%
+  mutate(feature = str_replace_all(str_to_sentence(feature), "_", " ")) %>%
+  ggplot(aes(x = value, fill = pred)) +
+  geom_density(alpha = 1/2, color = NA) +
+  scale_fill_viridis_d(option = "plasma", end = .8) +
+  labs(y = "Density",
+       fill = "Prediction",
+       title = "Distribution of generic metal songs' features") +
+  facet_wrap(~feature, scales = "free", ncol = 3) +
+  theme_light() +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.title.x = element_blank())
+
+```
+
+## Conclusion
+
+I had a lot of fun exploring what makes metal songs progressiv! Regarding my initial question, we learned that we can use a random-forest model to distinguish accurately progressive from general metal songs based on a few features (only the five most important are listed):
+
++ Duration
++ Intensity (combination of loudness and energy)
++ Speechiness (the extent to which there are spoken parts)
++ Instrumentalness
++ Time signature confidence
+
+**Combining the information obtained from the feature importance analysis from the logistic regression and random forest models, I would say that progressive songs are 1) longer, less intense (probably due to the presence of louder and softer parts that generate less intense songs overall), contain a lower proportion of spoken passages, are proportionally more instrumental, and have a less clear time signature (probably due to the alternation between different time signatures within the same song)**. To be honest, I was expecting this kind of pattern, but it's still pretty cool to see that a simple random-forest model can accurately capture this pattern and predict whether a metal song is progressive or not.
+
+Finally, as we have seen some generic songs are misclassified as progressive because they have certain "prog" attributes. So it might be a good idea to try not to predict whether a song is progressive, but rather whether an album is progressive. This could lead to greater accuracy and would make a perfect topic for another post!
+
+```{r, echo = FALSE}
+sinfo <- sessioninfo::session_info(pkgs = "attached")
+cls <- class(sinfo$packages)
+class(sinfo$packages) <- cls
+sinfo
+```
