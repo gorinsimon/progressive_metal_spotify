@@ -6,6 +6,7 @@
 
 # knitr and R markdown default cache and files directories are not tracked
 *_cache
+*_files
 
 # The output file is not tracked
 prog_analysis.html
